@@ -88,6 +88,7 @@ void process_destroy(struct process *process)
 
 void ctx_init(struct ctx *ctx)
 {
+  ctx->args.with_files = false;
   ctx->array = NULL;
   ctx->processes = NULL;
 }
@@ -329,7 +330,7 @@ int distribute_parallel(struct ctx *ctx, int chunk)
     active_child_processes += 1;
   }
 
-  if (end - begin) {
+  if (end - begin || ctx->args.pnum) {
     begin = end;
     end = ctx->args.array_size;
 
@@ -362,11 +363,12 @@ int parallel(struct ctx *ctx, int chunk)
   }
 
   printf("INFO: Waiting processes...\n");
-  int status, can_continue;
+  int status;
+  bool can_continue = true;
   for (int i = 0;i < ctx->args.pnum;i++) {
     waitpid(ctx->processes[i].pid, &status, 0);
     if (WEXITSTATUS(status) != 0) {
-      can_continue = 0;
+      can_continue = false;
       printf("ERROR: Child with pid %d failed, exit status %d\n",
              ctx->processes[i].pid, WEXITSTATUS(status));
       printf("\t error message: %s\n", strerror(WEXITSTATUS(status)));
@@ -420,16 +422,9 @@ int main(int argc, char **argv) {
   struct timeval start_time;
   gettimeofday(&start_time, NULL);
 
-  if (chunk != 1) {
-    ret = parallel(&ctx, chunk);
-    if (ret < 0) {
-      on_error(&ctx, errno);
-    }
-
-  } else {
-    struct MinMax min_max;
-
-    min_max = GetMinMax(ctx.array, 0, ctx.args.array_size);
+  ret = parallel(&ctx, chunk);
+  if (ret < 0) {
+    on_error(&ctx, errno);
   }
 
   struct timeval finish_time;
