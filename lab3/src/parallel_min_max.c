@@ -43,7 +43,7 @@ struct ctx {
 
 void generate_filepath_by_id(char *str, int id)
 {
-  sprintf(str, "./lab-fd-%d", id);
+  sprintf(str, "./lab-fd-%d.txt", id);
 }
 
 void process_init(struct process *process)
@@ -64,13 +64,8 @@ int process_alloc(struct process *process, bool with_files)
     generate_filepath_by_id(process->filepath, process->id);
     printf("INFO: Child file is %s\n", process->filepath);
 
-    fd = open(process->filepath, O_CREAT, O_RDWR);
-    if (fd < 0) {
-      printf("ERROR: Can`t open a file\n");
-      return -1;
-    }
-    process->read_fd = fd;
-    process->write_fd = fd;
+    process->read_fd = 0;
+    process->write_fd = 0;
   } else {
     pipe(process->fd);
     process->read_fd = process->fd[0];
@@ -88,6 +83,9 @@ void process_destroy(struct process *process)
 
 void ctx_init(struct ctx *ctx)
 {
+  ctx->args.pnum = 0;
+  ctx->args.seed = 0;
+  ctx->args.array_size = 0;
   ctx->args.with_files = false;
   ctx->array = NULL;
   ctx->processes = NULL;
@@ -134,8 +132,8 @@ int ctx_destroy(struct ctx *ctx)
       struct process *process = &ctx->processes[i];
 
       if (process) {
-        process_destroy(process);
         if (ctx->args.with_files) {
+          process_destroy(process);
           if (process->filepath) {
             ret = remove(process->filepath);
             if (ret < 0) {
@@ -153,6 +151,19 @@ int ctx_destroy(struct ctx *ctx)
   }
   if (ctx->processes)
     free(ctx->processes);
+}
+
+void on_kill_timer(struct ctx *ctx)
+{
+  int ret;
+
+  for (int i = 0;i < ctx->args.pnum;i++) {
+    ret = kill(ctx->processes[i].pid, 9);
+    if (ret < 0)
+      printf("ERROR: Process with pid %d sending SIGKILL failed\n");
+  }
+
+  ctx_destroy(ctx);
 }
 
 void on_error(struct ctx *ctx, int error)
@@ -248,11 +259,21 @@ int do_fork(int *array, struct process *process, int begin, int end)
 
       printf("INFO: Child result is {%d, %d}\n", min_max.min, min_max.max);
 
+      if (!process->write_fd) {
+        process->write_fd = open(process->filepath, O_CREAT | O_RDWR, S_IRWXU);
+        if (process->write_fd < 0) {
+          printf("ERROR: Can`t open a file\n");
+          exit(-1);
+        }
+      }
+
       ret = write(process->write_fd, &min_max, sizeof(struct MinMax));
       if (ret < 0) {
         printf("ERROR: Can`t write to fd\n");
         exit(-1);
       }
+
+      close(process->write_fd);
       exit(0);
       
     } else {
@@ -270,19 +291,31 @@ int do_fork(int *array, struct process *process, int begin, int end)
 
 int read_from_processes(struct ctx *ctx)
 {
-  int ret;
+  int ret, read_fd;
   struct MinMax min_max;
   printf("INFO: Reading from processes...\n");
 
   for (int i = 0; i < ctx->args.pnum; i++) {
-    ret = read(ctx->processes[i].read_fd, &min_max, sizeof(struct MinMax));
-    if (ret < 0)
+    read_fd = ctx->processes[i].read_fd;
+
+    if (ctx->args.with_files) {
+      read_fd = open(ctx->processes[i].filepath, O_RDWR);
+      if (read_fd < 0) {
+        printf("ERROR: Can`t open a file '%s'\n", ctx->processes[i].filepath);
+        printf("\t\terror message: %s\n", strerror(errno));
+        return -1;
+      }
+    }
+    ret = read(read_fd, &min_max, sizeof(struct MinMax));
+    if (ret <= 0)
       return -1;
     
     printf("INFO: child recv {%d, %d}\n", min_max.min, min_max.max);
 
     if (min_max.min < ctx->info.min) ctx->info.min = min_max.min;
     if (min_max.max > ctx->info.max) ctx->info.max = min_max.max;
+
+    close(read_fd);
   }
 }
 
