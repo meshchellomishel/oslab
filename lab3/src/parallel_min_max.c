@@ -162,6 +162,7 @@ void ctx_init(struct ctx *ctx)
   ctx->processes = NULL;
 
   ctx->common_args.common_result = 1;
+  ctx->info.sum = 0;
 }
 
 int ctx_alloc(struct ctx *ctx)
@@ -377,10 +378,45 @@ void *child_work(void *data)
   struct MinMax min_max;
   struct process *process = args->process;
 
+  // sleep(10);
+
   min_max = GetMinMax(args->array, args->begin, args->end);
 
-  sleep(10);
   printf("[INFO]: Child result is {%d, %d}\n", min_max.min, min_max.max);
+
+  if (!process->write_fd) {
+    process->write_fd = open(process->filepath, O_CREAT | O_RDWR, S_IRWXU);
+    if (process->write_fd < 0) {
+      printf("[ERROR]: Can`t open a file\n");
+      process->exit_status = -1;
+      return NULL;
+    }
+  }
+
+  ret = write(process->write_fd, &min_max, sizeof(struct MinMax));
+  if (ret < 0) {
+    printf("[ERROR]: Can`t write to fd\n");
+    process->exit_status = -1;
+    return NULL;
+  }
+
+  close(process->write_fd);
+  process->exit_status = 0;
+  process->is_done = true;
+  // printf("[DEBUG]: %d:Work is done\n", process->id);
+  return NULL;
+}
+
+void *child_work_sum(void *data)
+{
+  int ret;
+  struct process_args *args = data;
+  struct MinMax min_max;
+  struct process *process = args->process;
+
+  min_max = GetMinMax(args->array, args->begin, args->end);
+
+  printf("[INFO]: Child result is {%d, %d, %d}\n", min_max.min, min_max.max, min_max.sum);
 
   if (!process->write_fd) {
     process->write_fd = open(process->filepath, O_CREAT | O_RDWR, S_IRWXU);
@@ -478,7 +514,7 @@ int read_from_processes(struct ctx *ctx)
 {
   int ret, read_fd;
   struct MinMax min_max;
-  printf("[INFO]: Reading from processes...\n");
+  printf("[DEBUG]: Reading from processes...\n");
 
   for (int i = 0; i < ctx->args.pnum; i++) {
     read_fd = ctx->processes[i].read_fd;
@@ -499,6 +535,7 @@ int read_from_processes(struct ctx *ctx)
 
     if (min_max.min < ctx->info.min) ctx->info.min = min_max.min;
     if (min_max.max > ctx->info.max) ctx->info.max = min_max.max;
+    ctx->info.sum += min_max.sum;
 
     close(read_fd);
   }
@@ -639,6 +676,8 @@ int wait_process(struct process *process, bool threads) {
 
 int ctx_wait_processes(struct ctx *ctx) {
   int ret;
+
+  // sleep(5);
 
   for (int i = 0;i < ctx->args.pnum;i++) {
     ret = wait_process(&ctx->processes[i], ctx->args.threads);

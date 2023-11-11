@@ -1,7 +1,7 @@
 #ifndef UTILS_H
 #define UTILS_H
 
-#define PRINT_MAX_BOUND      3
+#define PRINT_MAX_BOUND      6
 #define PRINT_MIN_SKIP_LINES 2
 static inline int start_skip(int index, int len)
 {
@@ -11,6 +11,7 @@ static inline int start_skip(int index, int len)
 struct MinMax {
   int min;
   int max;
+  int sum;
 };
 
 void GenerateArray(int *array, unsigned int array_size, unsigned int seed);
