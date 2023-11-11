@@ -21,6 +21,8 @@
 #define MAX_PNUM 10
 
 #define TIMER_TO_KILL_SEC 10
+#define FACTORIAL_MOD_DEFAULT 10
+#define DEFAULT_PNUM 2
 
 bool its_time_to_kill = false;
 
@@ -37,13 +39,17 @@ struct args {
   bool with_files;
   int timeout;
   bool threads;
+
+  bool is_lab5;
+  int mod;
 };
 
 struct process_args {
-  int *array;
   struct process *process;
   int begin;
   int end;
+
+  int *array;
 };
 
 struct process {
@@ -59,12 +65,19 @@ struct process {
   int exit_status;
 };
 
+struct common_process_args {
+  pthread_mutex_t mutex;
+  int common_result;
+};
+
 struct ctx {
   struct args args;
   int *array;
   struct MinMax info;
   struct process *processes;
   int active_child_processes;
+
+  struct common_process_args common_args;
 };
 
 void on_alarm(int sig_num)
@@ -135,15 +148,20 @@ void process_destroy(struct process *process)
 
 void ctx_init(struct ctx *ctx)
 {
-  ctx->args.pnum = 0;
+  ctx->args.pnum = DEFAULT_PNUM;
   ctx->args.seed = 0;
   ctx->args.array_size = 0;
   ctx->args.with_files = false;
   ctx->args.timeout = TIMER_TO_KILL_SEC;
   ctx->args.threads = false;
+  ctx->args.is_lab5 = false;
+  ctx->args.mod = FACTORIAL_MOD_DEFAULT;
+
   ctx->active_child_processes = 0;
   ctx->array = NULL;
   ctx->processes = NULL;
+
+  ctx->common_args.common_result = 1;
   ctx->info.sum = 0;
 }
 
@@ -159,6 +177,8 @@ int ctx_alloc(struct ctx *ctx)
 
   ctx->info.min = INT_MAX;
   ctx->info.max = INT_MIN;
+
+  pthread_mutex_init(&ctx->common_args.mutex, NULL);
   return 0;
 }
 
@@ -216,10 +236,12 @@ int parse_args(struct ctx *ctx, int argc, char **argv)
                                         {"timeout", required_argument, 0, 0},
                                         {"by_files", no_argument, 0, 'f'},
                                         {"by_threads", no_argument, 0, 'T'},
+                                        {"is_lab5", no_argument, 0, 'F'},
+                                        {"mod", required_argument, 0, 0},
                                         {0, 0, 0, 0}};
 
       int option_index = 0;
-      int c = getopt_long(argc, argv, "fT", options, &option_index);
+      int c = getopt_long(argc, argv, "FfT", options, &option_index);
 
       if (c == -1) break;
 
@@ -257,6 +279,23 @@ int parse_args(struct ctx *ctx, int argc, char **argv)
             case 4:
               ctx->args.with_files = true;
               break;
+            
+            case 5:
+              ctx->args.threads = true;
+              break;
+            
+            case 6:
+              ctx->args.is_lab5 = true;
+              ctx->args.threads = true;
+              break;
+            
+            case 7:
+              ctx->args.mod = atoi(optarg);
+              if (ctx->args.mod <= 0) {
+                printf("mod is a positive number\n");
+                return -1;
+              }
+              break;
 
             defalut:
               printf("Index %d is out of options\n", option_index);
@@ -275,6 +314,10 @@ int parse_args(struct ctx *ctx, int argc, char **argv)
         //     return -1;
         //   }
         //   break;
+        case 'F':
+          ctx->args.is_lab5 = true;
+          ctx->args.threads = true;
+          break;
 
         case '?':
           break;
@@ -289,7 +332,8 @@ int parse_args(struct ctx *ctx, int argc, char **argv)
     return -1;
   }
 
-  if (!ctx->args.seed || !ctx->args.array_size || !ctx->args.pnum) {
+  if ((!ctx->args.seed || !ctx->args.pnum) &&
+      (!ctx->args.is_lab5 || !ctx->args.mod) || !ctx->args.array_size) {
     printf("Usage: %s --seed \"num\" --array_size \"num\" --pnum \"num\" --timeout \"time\" \n",
            argv[0]);
     return -1;
@@ -445,6 +489,27 @@ int do_fork(struct process_args *args)
   return 0;
 }
 
+int do_lab5(struct process_args *p_args, struct ctx *ctx)
+{
+  int buf_result = 1;
+
+  if (p_args->begin == 0)
+    p_args->begin = 1;
+
+  for (int i = p_args->begin; i < p_args->end; i++) {
+    printf("[DEBUG]: begin: %d, end: %d\n", p_args->begin, p_args->end);
+    buf_result *= i;
+  }
+  printf("[DEBUG]: Child result: %d\n", buf_result);
+
+  pthread_mutex_lock(&ctx->common_args.mutex);
+  ctx->common_args.common_result *= buf_result;
+  printf("[DEBUG]: common result is: %d\n", ctx->common_args.common_result);
+  pthread_mutex_unlock(&ctx->common_args.mutex);
+
+  return 0;
+}
+
 int read_from_processes(struct ctx *ctx)
 {
   int ret, read_fd;
@@ -476,9 +541,19 @@ int read_from_processes(struct ctx *ctx)
   }
 }
 
-int do_parallel(struct process_args *p_args, struct args *args)
+int fact_parallel(struct process_args *p_args, struct args *args)
 {
   int ret;
+
+  printf("[DEBUG]: begin = %d, end = %d\n", p_args->begin, p_args->end);
+
+  
+}
+
+int array_parallel(struct process_args *p_args, struct ctx *ctx)
+{
+  int ret;
+  struct args *args = &ctx->args;
 
   printf("[DEBUG]: begin = %d, end = %d\n", p_args->begin, p_args->end);
 
@@ -503,12 +578,14 @@ int do_parallel(struct process_args *p_args, struct args *args)
   return 0;
 }
 
-int __ctx_distribute_parallel(struct ctx *ctx, int chunk)
+int __ctx_distribute_parallel(struct ctx *ctx)
 {
-  int begin, end, ret;
+  int begin, end, ret, chunk;
   int active_child_processes = 0;
   bool with_files = ctx->args.with_files;
   
+  chunk = ctx->args.array_size / (ctx->args.pnum);
+
   if (chunk == 0)
     chunk = ctx->args.array_size;
 
@@ -527,11 +604,6 @@ int __ctx_distribute_parallel(struct ctx *ctx, int chunk)
     process->p_args->begin = begin;
     process->p_args->end = end;
 
-    ret = do_parallel(process->p_args, &ctx->args);
-    if (ret < 0) {
-      printf("[ERROR]: do_parallel failed\n");
-      continue;
-    }
     active_child_processes += 1;
   }
 
@@ -546,7 +618,24 @@ int __ctx_distribute_parallel(struct ctx *ctx, int chunk)
     process->p_args->begin = begin;
     process->p_args->end = end;
 
-    ret = do_parallel(process->p_args, &ctx->args);
+    active_child_processes += 1;
+  }
+
+  return active_child_processes;
+}
+
+int __ctx_run_parallel(struct ctx *ctx, int (func)(struct process_args *, struct ctx *))
+{
+  int ret;
+  struct process *process;
+  int active_child_processes = 0;
+
+  printf("[DEBUG]: Doing parallel...\n");
+
+  for (int i = 0; i < ctx->args.pnum; i++) {
+    process = &ctx->processes[i];
+
+    ret = func(process->p_args, ctx);
     if (ret < 0) {
       printf("[ERROR]: do_parallel failed\n");
       return -1;
@@ -608,29 +697,42 @@ int ctx_wait_processes(struct ctx *ctx) {
   return 0;
 }
 
-int ctx_parallel(struct ctx *ctx, int chunk)
+int ctx_parallel(struct ctx *ctx)
 {
   int ret;
 
   printf("[DEBUG]: Chunks...\n");
 
-  ctx->active_child_processes = __ctx_distribute_parallel(ctx, chunk);
-  if (ctx->active_child_processes <= 0) {
-    printf("[ERROR]: Failed to distribute processes\n");
-    return -1;
-  }
+  ctx->active_child_processes = __ctx_distribute_parallel(ctx);
 
-  printf("[DEBUG]: Waiting processes...\n");
-  ret = ctx_wait_processes(ctx);
-  if (ret < 0) {
-    printf("[ERROR]: Can`t read, failed to wait processes\n");
-    on_error(ctx, errno);
-  }
+  if (ctx->args.is_lab5) {
+    ret = __ctx_run_parallel(ctx, do_lab5);
+    if (ret <= 0) {
+      printf("[ERROR]: Failed to run parallel\n");
+      return -1;
+    }
+  } else {
+    GenerateArray(ctx->array, ctx->args.array_size, ctx->args.seed);
+    PrintArray(ctx->array, ctx->args.array_size);
 
-  ret = read_from_processes(ctx);
-  if (ret < 0) {
-    printf("[ERROR]: Can`t read from processes");
-    on_error(ctx, errno);
+    ret = __ctx_run_parallel(ctx, array_parallel);
+    if (ret <= 0) {
+      printf("[ERROR]: Failed to run parallel\n");
+      return -1;
+    }
+
+    printf("[DEBUG]: Waiting processes...\n");
+    ret = ctx_wait_processes(ctx);
+    if (ret < 0) {
+      printf("[ERROR]: Can`t read, failed to wait processes\n");
+      on_error(ctx, errno);
+    }
+
+    ret = read_from_processes(ctx);
+    if (ret < 0) {
+      printf("[ERROR]: Can`t read from processes");
+      on_error(ctx, errno);
+    }
   }
 
   return 0;
@@ -659,15 +761,10 @@ int main(int argc, char **argv) {
   if (ret < 0)
     on_error(&ctx, -ret);
 
-  GenerateArray(ctx.array, ctx.args.array_size, ctx.args.seed);
-  PrintArray(ctx.array, ctx.args.array_size);
-
-  chunk = ctx.args.array_size / (ctx.args.pnum);
-
   struct timeval start_time;
   gettimeofday(&start_time, NULL);
 
-  ret = ctx_parallel(&ctx, chunk);
+  ret = ctx_parallel(&ctx);
   if (ret < 0) {
     on_error(&ctx, errno);
   }
@@ -678,9 +775,13 @@ int main(int argc, char **argv) {
   double elapsed_time = (finish_time.tv_sec - start_time.tv_sec) * 1000.0;
   elapsed_time += (finish_time.tv_usec - start_time.tv_usec) / 1000.0;
 
-  printf("Min: %d\n", ctx.info.min);
-  printf("Max: %d\n", ctx.info.max);
-  printf("Sum: %d\n", ctx.info.sum);
+  if (ctx.args.is_lab5) {
+    printf("Common result is: %d\n", ctx.common_args.common_result);
+    printf("Result: %d\n", ctx.common_args.common_result % ctx.args.mod);
+  } else {
+    printf("Min: %d\n", ctx.info.min);
+    printf("Max: %d\n", ctx.info.max);
+  }
   printf("Elapsed time: %fms\n", elapsed_time);
   fflush(NULL);
   

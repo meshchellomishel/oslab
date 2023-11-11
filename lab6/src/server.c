@@ -13,12 +13,6 @@
 
 #include "pthread.h"
 
-struct FactorialArgs {
-  uint64_t begin;
-  uint64_t end;
-  uint64_t mod;
-};
-
 uint64_t MultModulo(uint64_t a, uint64_t b, uint64_t mod) {
   uint64_t result = 0;
   a = a % mod;
@@ -34,8 +28,9 @@ uint64_t MultModulo(uint64_t a, uint64_t b, uint64_t mod) {
 
 uint64_t Factorial(const struct FactorialArgs *args) {
   uint64_t ans = 1;
-
-  // TODO: your code here
+  
+  for (int i = args->begin; i < args->end; i++)
+    ans *= i;
 
   return ans;
 }
@@ -67,11 +62,13 @@ int main(int argc, char **argv) {
       switch (option_index) {
       case 0:
         port = atoi(optarg);
-        // TODO: your code here
+        if (port <= 0)
+          printf("[ERROR]: Invalid arg: Port number must be positive numben\n");
         break;
       case 1:
         tnum = atoi(optarg);
-        // TODO: your code here
+        if (tnum < 0)
+          printf("[ERROR]: Invalid arg: Thread number must be positive numben\n");
         break;
       default:
         printf("Index %d is out of options\n", option_index);
@@ -88,14 +85,16 @@ int main(int argc, char **argv) {
 
   if (port == -1 || tnum == -1) {
     fprintf(stderr, "Using: %s --port 20001 --tnum 4\n", argv[0]);
-    return 1;
+    goto on_error;
   }
 
   int server_fd = socket(AF_INET, SOCK_STREAM, 0);
   if (server_fd < 0) {
     fprintf(stderr, "Can not create server socket!");
-    return 1;
+    goto on_error;
   }
+
+  struct DistributeArgs *args = DistributeArgsAlloc(tnum);
 
   struct sockaddr_in server;
   server.sin_family = AF_INET;
@@ -108,13 +107,13 @@ int main(int argc, char **argv) {
   int err = bind(server_fd, (struct sockaddr *)&server, sizeof(server));
   if (err < 0) {
     fprintf(stderr, "Can not bind to socket!");
-    return 1;
+    goto on_error;
   }
 
   err = listen(server_fd, 128);
   if (err < 0) {
     fprintf(stderr, "Could not listen on socket\n");
-    return 1;
+    goto on_error;
   }
 
   printf("Server listening at %d\n", port);
@@ -147,26 +146,26 @@ int main(int argc, char **argv) {
 
       pthread_t threads[tnum];
 
-      uint64_t begin = 0;
-      uint64_t end = 0;
-      uint64_t mod = 0;
-      memcpy(&begin, from_client, sizeof(uint64_t));
-      memcpy(&end, from_client + sizeof(uint64_t), sizeof(uint64_t));
-      memcpy(&mod, from_client + 2 * sizeof(uint64_t), sizeof(uint64_t));
+      struct FactorialArgs *commonArgs = args->CommonArgs;
+      struct FactorialArgs *localArgs = args->LocalArgs;
 
-      fprintf(stdout, "Receive: %llu %llu %llu\n", begin, end, mod);
+      memcpy(&commonArgs->begin, from_client, sizeof(uint64_t));
+      memcpy(&commonArgs->end, from_client + sizeof(uint64_t), sizeof(uint64_t));
+      memcpy(&commonArgs->mod, from_client + 2 * sizeof(uint64_t), sizeof(uint64_t));
 
-      struct FactorialArgs args[tnum];
+      fprintf(stdout, "Receive: %llu %llu %llu\n", commonArgs->begin, commonArgs->end, commonArgs->mod);
+      if (commonArgs->begin == 0 || commonArgs->end == 0 || commonArgs->mod == 0)
+        fprintf(stdout, "[ERROR]: Invalid input: begin = 0 or end = 0 or mod = 0\n");
+
       for (uint32_t i = 0; i < tnum; i++) {
-        // TODO: parallel somehow
-        args[i].begin = 1;
-        args[i].end = 1;
-        args[i].mod = mod;
+        localArgs[i].pid = i;
+        Calculate_thread_args(commonArgs, &localArgs[i]);
+        printf("[DEBUG]: th%d: from '%d' -> '%d'", i, localArgs[i].begin, localArgs[i].end);
 
         if (pthread_create(&threads[i], NULL, ThreadFactorial,
                            (void *)&args[i])) {
           printf("Error: pthread_create failed!\n");
-          return 1;
+          goto on_error;
         }
       }
 
@@ -174,7 +173,7 @@ int main(int argc, char **argv) {
       for (uint32_t i = 0; i < tnum; i++) {
         uint64_t result = 0;
         pthread_join(threads[i], (void **)&result);
-        total = MultModulo(total, result, mod);
+        total = MultModulo(total, result, commonArgs->mod);
       }
 
       printf("Total: %llu\n", total);
@@ -187,10 +186,11 @@ int main(int argc, char **argv) {
         break;
       }
     }
-
-    shutdown(client_fd, SHUT_RDWR);
-    close(client_fd);
   }
-
+  
   return 0;
+
+  on_error:
+    DistributeArgsFree(args);
+    exit(-1);
 }
