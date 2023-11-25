@@ -99,7 +99,7 @@ int main(int argc, char **argv) {
 
   struct sockaddr_in server;
   server.sin_family = AF_INET;
-  server.sin_port = htons(20000);
+  server.sin_port = htons(port);
   server.sin_addr.s_addr = htonl(INADDR_ANY);
 
   int opt_val = 1;

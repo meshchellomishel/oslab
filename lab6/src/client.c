@@ -70,13 +70,15 @@ int str2addr(char *string, struct addr *addr) {
   if (!token)
     return -1;
 
-  strcpy((char *)&addr->ip, token);
+  printf("[]: %s\n", token);
+
+  memcpy(&addr->ip, token, sizeof(addr->ip));
 
   token = strtok(NULL, ":");
   if (!token)
     return -1;
 
-  strcpy((char *)&port, token);
+  memcpy(&port, token, sizeof(token));
   
   addr->port = atoi((const char *)&port);
   if (addr->port <= 0)
@@ -193,18 +195,10 @@ int main(int argc, char **argv) {
       printf("[ERROR]: Failed to get addr\n");
       goto on_error;
     }
-
-
-    int sck = socket(AF_INET, SOCK_STREAM, 0);
-    if (sck < 0) {
-      printf("[ERROR]: Socket creation failed!\n");
-      goto on_error;
-    }
-    to[i].fd = sck;
     
     printf("[DEBUG]: Ip: %s, Port: %d\n", to[i].ip, to[i].port);
 
-    struct hostent *hostname = gethostbyname(to[i].ip);
+    struct hostent *hostname = gethostbyname("127.0.0.1");
     if (hostname == NULL) {
       fprintf(stderr, "[ERROR]: gethostbyname failed with %s\n", to[i].ip);
       goto on_error;
@@ -212,13 +206,20 @@ int main(int argc, char **argv) {
  
     struct sockaddr_in server;
     server.sin_family = AF_INET;
-    server.sin_port = htons(to[i].port);
+    server.sin_port = htons(20000);
     server.sin_addr.s_addr = *((unsigned long *)hostname->h_addr);
-    printf("[DEBUG]: Connecting to Server%d\n", i);
+
+    int sck = socket(AF_INET, SOCK_STREAM, 0);
+    if (sck < 0) {
+      fprintf(stderr, "Socket creation failed!\n");
+      exit(1);
+    }
+    to[i].fd = sck;
+    printf("Connecting...\n");
 
     if (connect(sck, (struct sockaddr *)&server, sizeof(server)) < 0) {
-      printf("[ERROR]: Connection failed to Server%d\n", i);
-      goto on_error;
+      fprintf(stderr, "Connection failed\n");
+      exit(1);
     }
   }
 
