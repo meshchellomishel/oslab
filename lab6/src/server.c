@@ -12,6 +12,7 @@
 #include <sys/types.h>
 
 #include "pthread.h"
+#include "parallel_utils.h"
 
 uint64_t MultModulo(uint64_t a, uint64_t b, uint64_t mod) {
   uint64_t result = 0;
@@ -98,7 +99,7 @@ int main(int argc, char **argv) {
 
   struct sockaddr_in server;
   server.sin_family = AF_INET;
-  server.sin_port = htons((uint16_t)port);
+  server.sin_port = htons(20000);
   server.sin_addr.s_addr = htonl(INADDR_ANY);
 
   int opt_val = 1;
@@ -158,12 +159,11 @@ int main(int argc, char **argv) {
         fprintf(stdout, "[ERROR]: Invalid input: begin = 0 or end = 0 or mod = 0\n");
 
       for (uint32_t i = 0; i < tnum; i++) {
-        localArgs[i].pid = i;
-        Calculate_thread_args(commonArgs, &localArgs[i]);
-        printf("[DEBUG]: th%d: from '%d' -> '%d'", i, localArgs[i].begin, localArgs[i].end);
+        Calculate_thread_args(commonArgs, &localArgs[i], i, tnum);
+        printf("[DEBUG]: th%d: from '%d' -> '%d'\n", i, localArgs[i].begin, localArgs[i].end);
 
         if (pthread_create(&threads[i], NULL, ThreadFactorial,
-                           (void *)&args[i])) {
+                           (void *)&localArgs[i])) {
           printf("Error: pthread_create failed!\n");
           goto on_error;
         }
@@ -173,7 +173,7 @@ int main(int argc, char **argv) {
       for (uint32_t i = 0; i < tnum; i++) {
         uint64_t result = 0;
         pthread_join(threads[i], (void **)&result);
-        total = MultModulo(total, result, commonArgs->mod);
+        total *= result;
       }
 
       printf("Total: %llu\n", total);
