@@ -12,11 +12,15 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 
-#include <jansson.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 
 #include "parallel_utils.h"
 
 #define DEFAULT_PATH_TO_CONF "./config.conf"
+#define DEFAULT_THREADS_NUM 2
+#define DEFAULT_MOD 100
 
 struct Server {
   char ip[255];
@@ -52,6 +56,8 @@ bool ConvertStringToUI64(const char *str, uint64_t *val) {
 }
 
 struct addr {
+  int fd;
+  struct FactorialArgs *local;
   char ip[16];
   uint64_t port;
 };
@@ -64,15 +70,15 @@ int str2addr(char *string, struct addr *addr) {
   if (!token)
     return -1;
 
-  strcpy(&addr->ip, token);
+  strcpy((char *)&addr->ip, token);
 
   token = strtok(NULL, ":");
   if (!token)
     return -1;
 
-  strcpy(&port, token);
+  strcpy((char *)&port, token);
   
-  addr->port = atoi(&port);
+  addr->port = atoi((const char *)&port);
   if (addr->port <= 0)
     return -1;
 
@@ -124,10 +130,25 @@ int main(int argc, char **argv) {
     }
   }
 
-  if (k == -1 || mod == -1 || !strlen(servers)) {
-    fprintf(stderr, "Using: %s --k 1000 --mod 5 --servers /path/to/file\n",
-            argv[0]);
-    return 1;
+  if (k == -1) {
+    printf("[INFO]: Using default k\n");
+    k = DEFAULT_THREADS_NUM;
+  }
+  if (mod == -1) {
+    printf("[INFO]: Using default mod\n");
+    mod = DEFAULT_MOD;
+  }
+  if (!strlen(servers)) {
+    printf("[INFO]: Using default server path\n");
+    strcpy((char *)&servers, DEFAULT_PATH_TO_CONF);
+  }
+
+  // TODO: for one server here, rewrite with servers from file
+  unsigned int servers_num = 2;
+  struct addr *to = malloc(sizeof(struct addr) * servers_num);
+  if (!to) {
+    printf("[ERROR]: Failedd to allocate server addrs\n");
+    goto on_error;
   }
 
   struct DistributeArgs *args = DistributeArgsAlloc(servers_num);
@@ -136,13 +157,12 @@ int main(int argc, char **argv) {
     goto on_error;
   }
 
-  // TODO: for one server here, rewrite with servers from file
-  unsigned int servers_num = 1;
-  struct addr *to = malloc(sizeof(struct addr) * servers_num);
-  if (!to) {
-    printf("[ERROR]: Failedd to allocate server addrs\n");
-    goto on_error;
-  }
+  struct FactorialArgs *commonArgs = args->CommonArgs;
+  struct FactorialArgs *localArgs = args->LocalArgs;
+
+  commonArgs->begin = 1;
+  commonArgs->end = k;
+  commonArgs->mod = mod;
 
   int fd;
   fd = open(DEFAULT_PATH_TO_CONF, O_RDONLY);
@@ -153,86 +173,95 @@ int main(int argc, char **argv) {
 
   // TODO: work continiously, rewrite to make parallel
   for (int i = 0; i < servers_num; i++) {
-    char buf[21] = {}, elem;
+    unsigned char buf[21] = {};
+    unsigned char elem = '\0';
+    int j = 0;
+
     while (elem != '\n') {
-      ret = read(fd, &elem, 1);
-      if (ret <= 0) {
-        printf("[ERROR]: failed to read from file\n");
+      ret = read(fd, &elem, sizeof(elem));
+      if (ret < 0) {
+        printf("[ERROR]: failed to read from config file\n");
         goto on_error;
       }
-      if (elem != '\n')
-        strcat(&buf, &elem);
+
+      buf[j] = elem;
+      j++;
     }
-    ret = str2addr(&buf, &to[i]);
+    printf("\n[INFO]: Server%d %s\n", i, &buf);
+    ret = str2addr((char *)&buf, &to[i]);
     if (ret < 0) {
       printf("[ERROR]: Failed to get addr\n");
       goto on_error;
     }
-    struct hostent *hostname = gethostbyname(to[i].ip);
-    if (hostname == NULL) {
-      fprintf(stderr, "gethostbyname failed with %s\n", to[i].ip);
+
+
+    int sck = socket(AF_INET, SOCK_STREAM, 0);
+    if (sck < 0) {
+      printf("[ERROR]: Socket creation failed!\n");
       goto on_error;
     }
+    to[i].fd = sck;
+    
+    printf("[DEBUG]: Ip: %s, Port: %d\n", to[i].ip, to[i].port);
 
+    struct hostent *hostname = gethostbyname("localhost");
+    if (hostname == NULL) {
+      fprintf(stderr, "[ERROR]: gethostbyname failed with %s\n", to[i].ip);
+      goto on_error;
+    }
+ 
     struct sockaddr_in server;
     server.sin_family = AF_INET;
     server.sin_port = htons(to[i].port);
     server.sin_addr.s_addr = *((unsigned long *)hostname->h_addr);
-
-    int sck = socket(AF_INET, SOCK_STREAM, 0);
-    if (sck < 0) {
-      fprintf(stderr, "Socket creation failed!\n");
-      goto on_error;
-    }
+    printf("[DEBUG]: Connecting to Server%d\n", i);
 
     if (connect(sck, (struct sockaddr *)&server, sizeof(server)) < 0) {
-      fprintf(stderr, "Connection failed\n");
+      printf("[ERROR]: Connection failed to Server%d\n", i);
+      goto on_error;
+    }
+  }
+
+  printf("[DEBUG]: Distributing args\n");
+  for (int i = 0;i < servers_num; i++) {
+      Calculate_thread_args(commonArgs, localArgs, i, servers_num);
+      localArgs->mod = commonArgs->mod;
+
+      printf("[DEBUG]: Server'%d': '%d' -> '%d'\n", i, localArgs->begin, localArgs->end);
+      to[i].local = localArgs;
+  }
+
+  for (int i = 0; i < servers_num;i++) {
+    char task[sizeof(uint64_t) * 3];
+    memcpy(task, &localArgs->begin, sizeof(uint64_t));
+    memcpy(task + sizeof(uint64_t), &localArgs->end, sizeof(uint64_t));
+    memcpy(task + 2 * sizeof(uint64_t), &localArgs->mod, sizeof(uint64_t));
+
+    if (send(to[i].fd, task, sizeof(task), 0) < 0) {
+      fprintf(stderr, "[ERROR]: Server%d: Send failed\n", i);
+      goto on_error;
+    }
+  }
+
+  for (int i = 0; i < servers_num; i++) {
+    char response[sizeof(uint64_t)];
+    if (recv(to[i].fd, response, sizeof(response), 0) < 0) {
+      fprintf(stderr, "[ERROR]: Server%d: Recieve failed\n", i);
       goto on_error;
     }
 
-    struct FactorialArgs *commonArgs = args->CommonArgs;
-    struct FactorialArgs *localArgs = args->LocalArgs;
-
-    commonArgs->begin = 1;
-    commonArgs->end = k;
-    commonArgs->mod = mod;
-
-    for (int i = 0; i < servers_num;i++) {
-      Calculate_thread_args(commonArgs, localArgs);
-      localArgs->mod = commonArgs->mod;
-
-      char task[sizeof(uint64_t) * 3];
-      memcpy(task, &localArgs->begin, sizeof(uint64_t));
-      memcpy(task + sizeof(uint64_t), &localArgs->end, sizeof(uint64_t));
-      memcpy(task + 2 * sizeof(uint64_t), &localArgs->mod, sizeof(uint64_t));
-
-      printf("[DEBUG]: Server'%d': '%d' -> '%d'\n", i, localArgs->begin, localArgs->end);
-
-      if (send(sck, task, sizeof(task), 0) < 0) {
-        fprintf(stderr, "[ERROR]: Server%d: Send failed\n", i);
-        goto on_error;
-      }
-    }
-
-    for (int i = 0; i < servers_num; i++) {
-      char response[sizeof(uint64_t)];
-      if (recv(sck, response, sizeof(response), 0) < 0) {
-        fprintf(stderr, "[ERROR]: Server%d: Recieve failed\n", i);
-        goto on_error;
-      }
-
-      uint64_t answer = 0;
-      memcpy(&answer, response, sizeof(uint64_t));
-      printf("[INFO]: Server%d: answer: %llu\n", i, answer);
-    }
-
-    close(sck);
+    uint64_t answer = 0;
+    memcpy(&answer, response, sizeof(uint64_t));
+    printf("[INFO]: Server%d: answer: %llu\n", i, answer);
+    close(to[i].fd);
   }
+
   free(to);
 
   return 0;
 
 on_error:
+  close(fd);
   DistributeArgsFree(args);
   exit(-1);
 }

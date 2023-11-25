@@ -4,7 +4,6 @@ struct FactorialArgs {
     uint64_t begin;
     uint64_t end;
     uint64_t mod;
-    int pid;
 };
 
 struct DistributeArgs {
@@ -13,4 +12,6 @@ struct DistributeArgs {
     uint64_t tnum;
 };
 
-void Calculate_thread_args(struct DistributeArgs *args);
+void DistributeArgsFree(struct DistributeArgs *args);
+struct DistributeArgs *DistributeArgsAlloc(int tnum);
+void Calculate_thread_args(struct FactorialArgs *common, struct FactorialArgs *local, int pid, int pnum);

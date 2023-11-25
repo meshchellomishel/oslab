@@ -1,3 +1,6 @@
+#include <stdio.h>
+#include <stdlib.h>
+
 #include "parallel_utils.h"
 
 struct DistributeArgs *DistributeArgsAlloc(int tnum) {
@@ -17,7 +20,7 @@ struct DistributeArgs *DistributeArgsAlloc(int tnum) {
         goto on_error;
     }
 
-    args->COmmonArgs = NULL;
+    args->CommonArgs = NULL;
 
     args->CommonArgs = malloc(sizeof(struct FactorialArgs *));
     if (!args->CommonArgs) {
@@ -43,16 +46,16 @@ void DistributeArgsFree(struct DistributeArgs *args) {
     }
 }
 
-void Calculate_thread_args(struct FactorialArgs *common, struct FactorialArgs *local) {
-  int chunk = (common->end - common->begin + 1) / common->tnum;
+void Calculate_thread_args(struct FactorialArgs *common, struct FactorialArgs *local, int pid, int pnum) {
+  int chunk = (common->end - common->begin + 1) / pnum;
 
-  if (local->pid == 0)
-    local->begin = 1;
+  if (pid == 0)
+    local->begin = common->begin;
   else
-    local->begin = chunk * local->pid;
+    local->begin = chunk * pid;
 
-  if (local->pid + 1 == args->pnum)
+  if (pid + 1 == pnum)
     local->end = common->end;
 
-  local->end = chunk * (local->pid + 1);
+  local->end = chunk * (pid + 1);
 }

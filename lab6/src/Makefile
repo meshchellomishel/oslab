@@ -1,10 +1,10 @@
 export LD_LIBRARY_PATH=./
 
-client: client.c lib Makefile
-	gcc parallel_utils.so client.c -o client
+client: client.c parallel_utils.o Makefile
+	gcc parallel_utils.o client.c -o client
 
-server: server.c lib Makefile
-	gcc parallel_utils.so server.c -o server
+server: server.c parallel_utils.o Makefile
+	gcc parallel_utils.o server.c -o server
 
 parallel_utils: parallel_utils.h parallel_utils.c Makefile
 	gcc -c parallel_utils.c -o parallel_utils.o
