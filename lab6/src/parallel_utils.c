@@ -14,7 +14,7 @@ struct DistributeArgs *DistributeArgsAlloc(int tnum) {
 
     args->LocalArgs = NULL;
 
-    args->LocalArgs = malloc(sizeof(struct FactorialArgs *) * tnum);
+    args->LocalArgs = malloc(sizeof(struct FactorialArgs) * tnum);
     if (!args->LocalArgs) {
         printf("[ERROR]: Failed to allocate local args\n");
         goto on_error;
@@ -65,9 +65,9 @@ int Calculate_all_args(struct FactorialArgs *common, struct FactorialArgs *local
     if (local[i-1].end == common->end)
       return workers;
 
-    local[i].begin = local[i - 1].end + 1;
+    local[i].begin = local[i-1].end + 1;
     if (local[i].begin == common->end) {
-      local[i].end = local[i].begin;
+      local[i].end = common->end;
       return workers + 1;
     }
 
