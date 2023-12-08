@@ -87,8 +87,37 @@ int str2addr(char *string, struct addr *addr) {
   return 0;
 }
 
-int main(int argc, char **argv) {
+unsigned char *readline(int fd) {
   int ret;
+  unsigned char *buf = NULL;
+  unsigned char elem = '\0';
+  int j = 0;
+
+  buf = malloc(sizeof(unsigned char) * 270);
+  if (!buf) {
+    printf("[ERROR]: Can`t to allocate array\n");
+    return NULL;
+  }
+
+  while (elem != '\n') {
+    ret = read(fd, &elem, sizeof(elem));
+    if (ret < 0) {
+      printf("[ERROR]: failed to read from config file\n");
+      free(buf);
+      return NULL;
+    }
+
+    buf[j] = elem;
+    j++;
+  }
+
+  printf("%s", buf);
+
+  return buf;
+}
+
+int main(int argc, char **argv) {
+  int ret, result;
   uint64_t k = -1;
   uint64_t mod = -1;
   char servers[255] = {'\0'}; // TODO: explain why 255
@@ -145,8 +174,24 @@ int main(int argc, char **argv) {
     strcpy((char *)&servers, DEFAULT_PATH_TO_CONF);
   }
 
-  // TODO: for one server here, rewrite with servers from file
-  unsigned int servers_num = 2;
+  int fd, servers_num;
+  unsigned char *buf;
+
+  fd = open(DEFAULT_PATH_TO_CONF, O_RDONLY);
+  if (fd < 0) {
+    printf("[ERROR]: Failed to open config file '%s'\n", DEFAULT_PATH_TO_CONF);
+    return -1;
+  }
+
+  buf = readline(fd);
+  if (!buf < 0) {
+    printf("[ERROR]: failed to read count servers\n");
+    exit(2);
+  }
+  servers_num = atoi(buf);
+  printf("servers num: %d\n", servers_num);
+  free(buf);
+
   struct addr *to = malloc(sizeof(struct addr) * servers_num);
   if (!to) {
     printf("[ERROR]: Failedd to allocate server addrs\n");
@@ -166,31 +211,19 @@ int main(int argc, char **argv) {
   commonArgs->end = k;
   commonArgs->mod = mod;
 
-  int fd;
-  fd = open(DEFAULT_PATH_TO_CONF, O_RDONLY);
-  if (fd < 0) {
-    printf("[ERROR]: Failed to open config file '%s'\n", DEFAULT_PATH_TO_CONF);
-    return -1;
-  }
-
   // TODO: work continiously, rewrite to make parallel
   for (int i = 0; i < servers_num; i++) {
-    unsigned char buf[21] = {};
-    unsigned char elem = '\0';
-    int j = 0;
+    printf("Parsing server %d...\n", i);
+    unsigned char *conf_buf;
 
-    while (elem != '\n') {
-      ret = read(fd, &elem, sizeof(elem));
-      if (ret < 0) {
-        printf("[ERROR]: failed to read from config file\n");
-        goto on_error;
-      }
-
-      buf[j] = elem;
-      j++;
+    conf_buf = readline(fd);
+    if (!conf_buf) {
+      printf("[ERROR]: Cant failed to read config\n");
+      goto on_error;
     }
-    printf("\n[INFO]: Server%d %s\n", i, &buf);
-    ret = str2addr((char *)&buf, &to[i]);
+    printf("\n[INFO]: Server%d %s\n", i, conf_buf);
+    ret = str2addr(conf_buf, &to[i]);
+    free(conf_buf);
     if (ret < 0) {
       printf("[ERROR]: Failed to get addr\n");
       goto on_error;
@@ -198,7 +231,7 @@ int main(int argc, char **argv) {
     
     printf("[DEBUG]: Ip: %s, Port: %d\n", to[i].ip, to[i].port);
 
-    struct hostent *hostname = gethostbyname("127.0.0.1");
+    struct hostent *hostname = gethostbyname(to[i].ip);
     if (hostname == NULL) {
       fprintf(stderr, "[ERROR]: gethostbyname failed with %s\n", to[i].ip);
       goto on_error;
@@ -206,7 +239,7 @@ int main(int argc, char **argv) {
  
     struct sockaddr_in server;
     server.sin_family = AF_INET;
-    server.sin_port = htons(20000);
+    server.sin_port = htons(to[i].port);
     server.sin_addr.s_addr = *((unsigned long *)hostname->h_addr);
 
     int sck = socket(AF_INET, SOCK_STREAM, 0);
@@ -224,27 +257,26 @@ int main(int argc, char **argv) {
   }
 
   printf("[DEBUG]: Distributing args\n");
-  for (int i = 0;i < servers_num; i++) {
-      Calculate_thread_args(commonArgs, localArgs, i, servers_num);
-      localArgs->mod = commonArgs->mod;
+  int current_workers = Calculate_all_args(commonArgs, localArgs, servers_num);
+  for (int i = 0;i < current_workers; i++) {
+      localArgs[i].mod = commonArgs->mod;
 
-      printf("[DEBUG]: Server'%d': '%d' -> '%d'\n", i, localArgs->begin, localArgs->end);
-      to[i].local = localArgs;
+      printf("[DEBUG]: Server'%d': '%d' -> '%d'\n", i, localArgs[i].begin, localArgs[i].end);
+      to[i].local = &localArgs[i];
+
+      char task[sizeof(uint64_t) * 3];
+      memcpy(task, &localArgs[i].begin, sizeof(uint64_t));
+      memcpy(task + sizeof(uint64_t), &localArgs[i].end, sizeof(uint64_t));
+      memcpy(task + 2 * sizeof(uint64_t), &localArgs[i].mod, sizeof(uint64_t));
+
+      if (send(to[i].fd, task, sizeof(task), 0) < 0) {
+        fprintf(stderr, "[ERROR]: Server%d: Send failed\n", i);
+        goto on_error;
+      }
   }
 
-  for (int i = 0; i < servers_num;i++) {
-    char task[sizeof(uint64_t) * 3];
-    memcpy(task, &localArgs->begin, sizeof(uint64_t));
-    memcpy(task + sizeof(uint64_t), &localArgs->end, sizeof(uint64_t));
-    memcpy(task + 2 * sizeof(uint64_t), &localArgs->mod, sizeof(uint64_t));
-
-    if (send(to[i].fd, task, sizeof(task), 0) < 0) {
-      fprintf(stderr, "[ERROR]: Server%d: Send failed\n", i);
-      goto on_error;
-    }
-  }
-
-  for (int i = 0; i < servers_num; i++) {
+  result = 1;
+  for (int i = 0; i < current_workers; i++) {
     char response[sizeof(uint64_t)];
     if (recv(to[i].fd, response, sizeof(response), 0) < 0) {
       fprintf(stderr, "[ERROR]: Server%d: Recieve failed\n", i);
@@ -255,8 +287,10 @@ int main(int argc, char **argv) {
     memcpy(&answer, response, sizeof(uint64_t));
     printf("[INFO]: Server%d: answer: %llu\n", i, answer);
     close(to[i].fd);
+    result *= answer;
   }
 
+  printf("%d! mod %d = %d", k - 1, mod, result % mod);
   free(to);
 
   return 0;

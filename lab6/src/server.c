@@ -30,7 +30,7 @@ uint64_t MultModulo(uint64_t a, uint64_t b, uint64_t mod) {
 uint64_t Factorial(const struct FactorialArgs *args) {
   uint64_t ans = 1;
   
-  for (int i = args->begin; i < args->end; i++)
+  for (int i = args->begin; i <= args->end; i++)
     ans *= i;
 
   return ans;
@@ -95,8 +95,8 @@ int main(int argc, char **argv) {
     goto on_error;
   }
 
-  struct DistributeArgs *args = DistributeArgsAlloc(tnum);
-
+  struct DistributeArgs *args = NULL;
+  args = DistributeArgsAlloc(tnum);
   struct sockaddr_in server;
   server.sin_family = AF_INET;
   server.sin_port = htons(port);
@@ -158,8 +158,8 @@ int main(int argc, char **argv) {
       if (commonArgs->begin == 0 || commonArgs->end == 0 || commonArgs->mod == 0)
         fprintf(stdout, "[ERROR]: Invalid input: begin = 0 or end = 0 or mod = 0\n");
 
-      for (uint32_t i = 0; i < tnum; i++) {
-        Calculate_thread_args(commonArgs, &localArgs[i], i, tnum);
+      int current_workers = Calculate_all_args(commonArgs, localArgs, tnum);
+      for (uint32_t i = 0; i < current_workers; i++) {
         printf("[DEBUG]: th%d: from '%d' -> '%d'\n", i, localArgs[i].begin, localArgs[i].end);
 
         if (pthread_create(&threads[i], NULL, ThreadFactorial,
@@ -170,8 +170,9 @@ int main(int argc, char **argv) {
       }
 
       uint64_t total = 1;
-      for (uint32_t i = 0; i < tnum; i++) {
+      for (uint32_t i = 0; i < current_workers; i++) {
         uint64_t result = 0;
+        printf("i: %d\n", i);
         pthread_join(threads[i], (void **)&result);
         total *= result;
       }
@@ -188,6 +189,7 @@ int main(int argc, char **argv) {
     }
   }
   
+  DistributeArgsFree(args);
   return 0;
 
   on_error:

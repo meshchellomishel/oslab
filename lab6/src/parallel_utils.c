@@ -46,16 +46,39 @@ void DistributeArgsFree(struct DistributeArgs *args) {
     }
 }
 
-void Calculate_thread_args(struct FactorialArgs *common, struct FactorialArgs *local, int pid, int pnum) {
+int Calculate_all_args(struct FactorialArgs *common, struct FactorialArgs *local, int pnum) {
+  int buf, workers = 0;
   int chunk = (common->end - common->begin + 1) / pnum;
+  if (!chunk)
+    chunk = 1;
 
-  if (pid == 0)
-    local->begin = common->begin;
-  else
-    local->begin = chunk * pid;
+  local[0].begin = common->begin;
+  if (local[0].begin == common->end) {
+      local[0].end = local[0].begin;
+      return workers + 1;
+    }
 
-  if (pid + 1 == pnum)
-    local->end = common->end;
+  local[0].end = common->begin + chunk;
+  workers++;
 
-  local->end = chunk * (pid + 1);
+  for (int i = 1;i < pnum - 1;i++) {
+    if (local[i-1].end == common->end)
+      return workers;
+
+    local[i].begin = local[i - 1].end + 1;
+    if (local[i].begin == common->end) {
+      local[i].end = local[i].begin;
+      return workers + 1;
+    }
+
+    local[i].end = local[i].begin + chunk;
+    workers++;
+  }
+
+  if (local[pnum-2].end == common->end)
+      return workers;
+
+  local[pnum-1].begin = local[pnum-2].end + 1;
+  local[pnum-1].end = common->end;
+  return workers + 1;
 }

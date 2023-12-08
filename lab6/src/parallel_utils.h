@@ -15,3 +15,4 @@ struct DistributeArgs {
 void DistributeArgsFree(struct DistributeArgs *args);
 struct DistributeArgs *DistributeArgsAlloc(int tnum);
 void Calculate_thread_args(struct FactorialArgs *common, struct FactorialArgs *local, int pid, int pnum);
+int Calculate_all_args(struct FactorialArgs *common, struct FactorialArgs *local, int pnum);
