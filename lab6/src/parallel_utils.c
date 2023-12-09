@@ -46,11 +46,20 @@ void DistributeArgsFree(struct DistributeArgs *args) {
     }
 }
 
+int min(int val1, int val2) {
+  if (val1 > val2)
+    return val2;
+  return val1;
+}
+
 int Calculate_all_args(struct FactorialArgs *common, struct FactorialArgs *local, int pnum) {
   int buf, workers = 0;
   int chunk = (common->end - common->begin + 1) / pnum;
   if (!chunk)
     chunk = 1;
+
+  if (pnum <= 0)
+    return 0;
 
   local[0].begin = common->begin;
   if (local[0].begin == common->end) {
@@ -58,20 +67,18 @@ int Calculate_all_args(struct FactorialArgs *common, struct FactorialArgs *local
       return workers + 1;
     }
 
-  local[0].end = common->begin + chunk;
+  local[0].end = min(common->begin + chunk, common->end);
   workers++;
+
+  if (pnum == 1)
+    return workers;
 
   for (int i = 1;i < pnum - 1;i++) {
     if (local[i-1].end == common->end)
       return workers;
 
     local[i].begin = local[i-1].end + 1;
-    if (local[i].begin == common->end) {
-      local[i].end = common->end;
-      return workers + 1;
-    }
-
-    local[i].end = local[i].begin + chunk;
+    local[i].end = min(common->begin + chunk, common->end);
     workers++;
   }
 

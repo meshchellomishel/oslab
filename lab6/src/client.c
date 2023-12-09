@@ -290,7 +290,7 @@ int main(int argc, char **argv) {
     result *= answer;
   }
 
-  printf("%d! mod %d = %d", k - 1, mod, result % mod);
+  printf("%d! mod %d = %d", k, mod, result % mod);
   free(to);
 
   return 0;
